@@ -7,18 +7,27 @@ const generateToken = (userId) => {
 
 exports.register = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, username, email, password } = req.body;
     
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: 'Email already in use' });
+    if (username && !/^[a-zA-Z0-9._-]{3,30}$/.test(username.trim())) {
+      return res.status(400).json({ message: 'Username must be 3-30 characters and use only letters, numbers, dots, underscores, or hyphens' });
     }
 
-    const user = await User.create({ name, email, password });
+    const existingUser = await User.findOne({
+      $or: [
+        { email },
+        ...(username ? [{ username: username.trim().toLowerCase() }] : []),
+      ],
+    });
+    if (existingUser) {
+      return res.status(400).json({ message: 'Email or username already in use' });
+    }
+
+    const user = await User.create({ name, username, email, password });
     const token = generateToken(user._id);
 
     res.status(201).json({ token, user });

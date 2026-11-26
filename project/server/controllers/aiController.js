@@ -12,6 +12,75 @@ const COMMAND_PROMPTS = {
   make_shorter: 'Make the following text shorter while keeping the key meaning:',
 };
 
+const DOCUMENT_TEMPLATES = {
+  'meeting-notes': {
+    title: 'Meeting Notes',
+    sections: [
+      'Meeting details',
+      'Attendees',
+      'Main agenda',
+      'Discussion notes',
+      'Important highlights',
+      'Decisions',
+      'Action items',
+      'Next steps',
+    ],
+  },
+  'product-specs': {
+    title: 'Product Specs',
+    sections: [
+      'Product overview',
+      'What is the product?',
+      'Problem statement',
+      'Target users',
+      'Product benefits',
+      'Key features',
+      'Requirements',
+      'Success metrics',
+      'Dependencies and risks',
+    ],
+  },
+  'project-proposal': {
+    title: 'Project Proposal',
+    sections: [
+      'Executive summary',
+      'Problem statement',
+      'Goals and objectives',
+      'Proposed solution',
+      'Scope and deliverables',
+      'Timeline and milestones',
+      'Team and responsibilities',
+      'Budget and resources',
+      'Risks and mitigations',
+      'Success metrics',
+      'Approval',
+    ],
+  },
+};
+
+const parseTemplateResponse = (responseText, expectedSections) => {
+  let text = responseText.trim();
+  if (text.startsWith('```')) {
+    text = text.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+  }
+  const parsed = JSON.parse(text);
+  const document = parsed.type === 'doc' ? parsed : parsed.doc;
+  if (document?.type !== 'doc' || !Array.isArray(document.content)) {
+    throw new Error('Gemini returned an invalid document template');
+  }
+
+  const headings = new Set(
+    document.content
+      .filter((node) => node?.type === 'heading' && Array.isArray(node.content))
+      .map((node) => node.content.map((part) => part.text || '').join('').trim())
+  );
+  if (!expectedSections.every((section) => headings.has(section))) {
+    throw new Error('Gemini returned an incomplete document template');
+  }
+
+  return document;
+};
+
 exports.runCommand = async (req, res) => {
   try {
     const { selectedText, command } = req.body;
@@ -37,6 +106,34 @@ exports.runCommand = async (req, res) => {
       return res.status(429).json({ message: 'AI rate limit reached. Please wait a minute and try again.' });
     }
     res.status(500).json({ message: 'AI processing failed: ' + err.message });
+  }
+};
+
+exports.generateTemplate = async (req, res) => {
+  try {
+    const template = DOCUMENT_TEMPLATES[req.body?.template];
+    if (!template) {
+      return res.status(400).json({ message: 'Invalid document template' });
+    }
+
+    const sections = template.sections
+      .map((section) => `- ${section}`)
+      .join('\n');
+    const result = await model.generateContent(
+      `Create a fill-in document template titled "${template.title}" as valid TipTap JSON.
+Return one JSON object whose root has "type": "doc" and a "content" array. Do not wrap the document in a "doc" property. Use heading nodes with attrs.level and paragraph nodes containing short bracketed prompts that tell the user what details to add. Do not invent project facts or fill in actual answers. Include every section below as a heading, using the exact heading text and in the same order:
+${sections}
+Use one concise placeholder paragraph under each section. Return no markdown fences or explanation.`
+    );
+
+    const content = parseTemplateResponse(result.response.text(), template.sections);
+    res.json({ title: template.title, content });
+  } catch (err) {
+    console.error('AI template generation error:', err.message);
+    if (err.message?.includes('429') || err.message?.includes('quota')) {
+      return res.status(429).json({ message: 'AI rate limit reached. Please wait a minute and try again.' });
+    }
+    res.status(500).json({ message: 'AI template generation failed. Please try again.' });
   }
 };
 

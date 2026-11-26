@@ -28,7 +28,7 @@ exports.getDocumentsByWorkspace = async (req, res) => {
 
 exports.createDocument = async (req, res) => {
   try {
-    const { title, workspaceId } = req.body;
+    const { title, workspaceId, content } = req.body;
 
     const workspace = await Workspace.findById(workspaceId);
     if (!workspace) {
@@ -44,6 +44,7 @@ exports.createDocument = async (req, res) => {
 
     const document = await Document.create({
       title: title || 'Untitled',
+      ...(content !== undefined && { content }),
       workspace: workspaceId,
       createdBy: req.user._id,
       lastEditedBy: req.user._id,

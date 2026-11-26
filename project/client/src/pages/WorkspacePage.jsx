@@ -28,10 +28,11 @@ export default function WorkspacePage() {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showInviteModal, setShowInviteModal] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteUsername, setInviteUsername] = useState('');
   const [inviteRole, setInviteRole] = useState('editor');
   const [inviting, setInviting] = useState(false);
   const [creatingDoc, setCreatingDoc] = useState(false);
+  const [deletingWorkspace, setDeletingWorkspace] = useState(false);
   const [searchDoc, setSearchDoc] = useState('');
 
   useEffect(() => {
@@ -68,15 +69,15 @@ export default function WorkspacePage() {
 
   const inviteMember = async (e) => {
     e.preventDefault();
-    if (!inviteEmail.trim()) return;
+    if (!inviteUsername.trim()) return;
     setInviting(true);
     try {
       const res = await api.post(`/workspaces/${id}/invite`, {
-        email: inviteEmail.trim(),
+        username: inviteUsername.trim(),
         role: inviteRole,
       });
       setWorkspace(res.data);
-      setInviteEmail('');
+      setInviteUsername('');
       setShowInviteModal(false);
       toast.success('Collaborator invited successfully');
     } catch (err) {
@@ -96,11 +97,48 @@ export default function WorkspacePage() {
     }
   };
 
+  const deleteWorkspace = async () => {
+    if (!window.confirm(`Delete "${workspace?.name}" and all of its documents? This cannot be undone.`)) {
+      return;
+    }
+    setDeletingWorkspace(true);
+    try {
+      await api.delete(`/workspaces/${id}`);
+      toast.success('Workspace deleted');
+      navigate('/dashboard');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete workspace');
+    } finally {
+      setDeletingWorkspace(false);
+    }
+  };
+
   const filteredDocs = documents.filter((doc) =>
     doc.title.toLowerCase().includes(searchDoc.toLowerCase())
   );
 
-  const isOwner = workspace?.owner?._id === user?._id || workspace?.owner === user?._id;
+  const isOwner =
+    Boolean(user?._id) &&
+    (String(workspace?.owner?._id || workspace?.owner) === String(user._id) ||
+      workspace?.members?.some(
+        (member) =>
+          String(member.user?._id || member.user) === String(user._id) &&
+          member.role === 'owner'
+      ));
+  const canInviteMembers =
+    isOwner ||
+    workspace?.members?.some(
+      (member) =>
+        String(member.user?._id || member.user) === String(user?._id) &&
+        member.role === 'editor'
+    );
+  const canDeleteWorkspace =
+    isOwner ||
+    workspace?.members?.some(
+      (member) =>
+        String(member.user?._id || member.user) === String(user?._id) &&
+        member.role === 'editor'
+    );
 
   if (loading) {
     return (
@@ -194,7 +232,18 @@ export default function WorkspacePage() {
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
-            {isOwner && (
+            {canDeleteWorkspace && (
+              <button
+                type="button"
+                onClick={deleteWorkspace}
+                disabled={deletingWorkspace}
+                className="px-4 py-2.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{deletingWorkspace ? 'Deleting...' : 'Delete Workspace'}</span>
+              </button>
+            )}
+            {canInviteMembers && (
               <button
                 type="button"
                 onClick={() => setShowInviteModal(true)}
@@ -302,7 +351,7 @@ export default function WorkspacePage() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-slate-800">Team Members</h3>
-              {isOwner && (
+              {canInviteMembers && (
                 <button
                   type="button"
                   onClick={() => setShowInviteModal(true)}
@@ -367,7 +416,7 @@ export default function WorkspacePage() {
                 type="button"
                 onClick={() => {
                   setShowInviteModal(false);
-                  setInviteEmail('');
+                  setInviteUsername('');
                 }}
                 className="text-slate-400 hover:text-slate-600 text-sm font-semibold"
               >
@@ -380,13 +429,13 @@ export default function WorkspacePage() {
             <form onSubmit={inviteMember} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Email Address
+                  Username or email
                 </label>
                 <input
-                  type="email"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  placeholder="colleague@example.com"
+                  type="text"
+                  value={inviteUsername}
+                  onChange={(e) => setInviteUsername(e.target.value)}
+                  placeholder="Username or colleague@example.com"
                   className="w-full px-3.5 py-2.5 text-xs text-slate-800 border border-slate-300 rounded-xl focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition"
                   autoFocus
                   required
@@ -412,7 +461,7 @@ export default function WorkspacePage() {
                   type="button"
                   onClick={() => {
                     setShowInviteModal(false);
-                    setInviteEmail('');
+                    setInviteUsername('');
                   }}
                   className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 transition"
                 >
@@ -420,7 +469,7 @@ export default function WorkspacePage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={inviting || !inviteEmail.trim()}
+                  disabled={inviting || !inviteUsername.trim()}
                   className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-semibold shadow-xs transition disabled:opacity-50"
                 >
                   {inviting ? 'Sending Invite...' : 'Send Invitation'}

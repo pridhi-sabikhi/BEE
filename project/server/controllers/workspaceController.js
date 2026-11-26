@@ -1,4 +1,6 @@
 const Workspace = require('../models/Workspace');
+const Document = require('../models/Document');
+const Message = require('../models/Message');
 const User = require('../models/User');
 
 exports.getWorkspaces = async (req, res) => {
@@ -41,22 +43,50 @@ exports.createWorkspace = async (req, res) => {
 
 exports.inviteMember = async (req, res) => {
   try {
-    const { email, role } = req.body;
+    const { username, email, role } = req.body;
+    const identifier = String(username || email || '').trim();
+    if (!identifier) {
+      return res.status(400).json({ message: 'Username is required' });
+    }
+
     const workspace = await Workspace.findById(req.params.id);
 
     if (!workspace) {
       return res.status(404).json({ message: 'Workspace not found' });
     }
 
-    if (workspace.owner.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Only the owner can invite members' });
+    const inviterMembership = workspace.members.find(
+      (member) => member.user.toString() === req.user._id.toString()
+    );
+    const isOwner = workspace.owner.toString() === req.user._id.toString();
+    if (!isOwner && inviterMembership?.role !== 'editor') {
+      return res.status(403).json({ message: 'Only workspace owners and editors can invite members' });
     }
 
-    const userToInvite = await User.findOne({ email });
-    if (!userToInvite) {
-      return res.status(404).json({ message: 'User not found with that email' });
+    if (role && !['editor', 'viewer'].includes(role)) {
+      return res.status(400).json({ message: 'Invalid member role' });
     }
 
+    const escapedIdentifier = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matchingUsers = await User.find({
+      $or: [
+        { username: new RegExp(`^${escapedIdentifier}$`, 'i') },
+        { email: identifier.toLowerCase() },
+        { email: new RegExp(`^${escapedIdentifier}@`, 'i') },
+        { name: new RegExp(`^${escapedIdentifier}$`, 'i') },
+      ],
+    })
+      .select('_id')
+      .limit(2);
+
+    if (matchingUsers.length === 0) {
+      return res.status(404).json({ message: 'No account found for that username or email' });
+    }
+    if (matchingUsers.length > 1) {
+      return res.status(409).json({ message: 'More than one account matches that name. Use the account email instead.' });
+    }
+
+    const userToInvite = matchingUsers[0];
     const alreadyMember = workspace.members.some(
       (m) => m.user.toString() === userToInvite._id.toString()
     );
@@ -78,6 +108,35 @@ exports.inviteMember = async (req, res) => {
     res.json(populated);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.deleteWorkspace = async (req, res) => {
+  try {
+    const workspace = await Workspace.findById(req.params.id);
+    if (!workspace) {
+      return res.status(404).json({ message: 'Workspace not found' });
+    }
+
+    const membership = workspace.members.find(
+      (member) => member.user.toString() === req.user._id.toString()
+    );
+    if (!membership || !['owner', 'editor'].includes(membership.role)) {
+      return res.status(403).json({ message: 'Only workspace owners and editors can delete this workspace' });
+    }
+
+    const documents = await Document.find({ workspace: workspace._id }).select('_id');
+    const documentIds = documents.map((document) => document._id);
+    if (documentIds.length > 0) {
+      await Message.deleteMany({ document: { $in: documentIds } });
+      await Document.deleteMany({ _id: { $in: documentIds } });
+    }
+    await Workspace.deleteOne({ _id: workspace._id });
+
+    res.json({ message: 'Workspace deleted' });
+  } catch (err) {
+    console.error('Workspace deletion error:', err.message);
+    res.status(500).json({ message: 'Failed to delete workspace' });
   }
 };
 

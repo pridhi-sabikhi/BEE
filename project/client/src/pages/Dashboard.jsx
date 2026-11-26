@@ -17,28 +17,34 @@ import {
   FileSpreadsheet,
   CheckCircle2,
   Folder,
+  UserPlus,
+  Loader2,
 } from 'lucide-react';
 
 const TEMPLATES = [
   {
+    key: null,
     title: 'Blank Document',
     desc: 'Start writing from a clean slate',
     icon: FileText,
     color: 'from-blue-500 to-indigo-600',
   },
   {
+    key: 'meeting-notes',
     title: 'Meeting Notes',
     desc: 'Agenda, discussion, & action items',
     icon: Calendar,
     color: 'from-emerald-500 to-teal-600',
   },
   {
+    key: 'product-specs',
     title: 'Product Specs',
     desc: 'Overview, user stories, requirements',
     icon: Layers,
     color: 'from-violet-500 to-purple-600',
   },
   {
+    key: 'project-proposal',
     title: 'Project Proposal',
     desc: 'Goals, timelines, and deliverables',
     icon: FileSpreadsheet,
@@ -55,6 +61,13 @@ export default function Dashboard() {
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [creatingTemplate, setCreatingTemplate] = useState(null);
+  const [pendingTemplate, setPendingTemplate] = useState(null);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteWorkspace, setInviteWorkspace] = useState(null);
+  const [inviteUsername, setInviteUsername] = useState('');
+  const [inviteRole, setInviteRole] = useState('editor');
+  const [inviting, setInviting] = useState(false);
 
   useEffect(() => {
     fetchWorkspaces();
@@ -81,7 +94,13 @@ export default function Dashboard() {
       setNewName('');
       setShowModal(false);
       toast.success('Workspace created successfully');
-      navigate(`/workspace/${res.data._id}`);
+      if (pendingTemplate) {
+        const template = pendingTemplate;
+        setPendingTemplate(null);
+        await createTemplateDocument(res.data, template);
+      } else {
+        navigate(`/workspace/${res.data._id}`);
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to create workspace');
     } finally {
@@ -89,24 +108,76 @@ export default function Dashboard() {
     }
   };
 
-  const handleTemplateClick = async (templateTitle) => {
-    if (workspaces.length === 0) {
-      setShowModal(true);
-      return;
-    }
-    // Navigate to first workspace or prompt
-    const targetWs = workspaces[0];
+  const createTemplateDocument = async (workspace, template) => {
+    setCreatingTemplate(template.title);
     try {
-      const res = await api.post('/documents', {
-        workspaceId: targetWs._id,
-        title: templateTitle,
-      });
+      const documentData = { workspaceId: workspace._id, title: template.title };
+      if (template.key) {
+        const templateRes = await api.post('/ai/generate-template', { template: template.key });
+        documentData.title = templateRes.data.title;
+        documentData.content = templateRes.data.content;
+      }
+      const res = await api.post('/documents', documentData);
       navigate(`/document/${res.data._id}`);
-    } catch {
-      navigate(`/workspace/${targetWs._id}`);
+      return true;
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to create document');
+      return false;
+    } finally {
+      setCreatingTemplate(null);
     }
   };
 
+  const handleTemplateClick = async (template) => {
+    if (workspaces.length === 0) {
+      setPendingTemplate(template);
+      setShowModal(true);
+      return;
+    }
+    await createTemplateDocument(workspaces[0], template);
+  };
+
+  const inviteMember = async (e) => {
+    e.preventDefault();
+    if (!inviteWorkspace || !inviteUsername.trim()) return;
+    setInviting(true);
+    try {
+      const res = await api.post(`/workspaces/${inviteWorkspace._id}/invite`, {
+        username: inviteUsername.trim(),
+        role: inviteRole,
+      });
+      setWorkspaces((prev) =>
+        prev.map((workspace) =>
+          workspace._id === inviteWorkspace._id ? res.data : workspace
+        )
+      );
+      setShowInviteModal(false);
+      setInviteUsername('');
+      setInviteWorkspace(null);
+      toast.success('Collaborator invited successfully');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to invite member');
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const isWorkspaceOwner = (workspace) =>
+    Boolean(user?._id) &&
+    (String(workspace?.owner?._id || workspace?.owner) === String(user._id) ||
+      workspace?.members?.some(
+        (member) =>
+          String(member.user?._id || member.user) === String(user._id) &&
+          member.role === 'owner'
+      ));
+  const canInviteToWorkspace = (workspace) =>
+    isWorkspaceOwner(workspace) ||
+    workspace?.members?.some(
+      (member) =>
+        String(member.user?._id || member.user) === String(user?._id) &&
+        member.role === 'editor'
+    );
+  const inviteableWorkspaces = workspaces.filter(canInviteToWorkspace);
   const filteredWorkspaces = workspaces.filter((ws) =>
     ws.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -196,13 +267,15 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {TEMPLATES.map((tmpl, idx) => {
+            {TEMPLATES.map((tmpl) => {
               const Icon = tmpl.icon;
               return (
-                <div
-                  key={idx}
-                  onClick={() => handleTemplateClick(tmpl.title)}
-                  className="bg-white rounded-2xl border border-slate-200/80 p-5 hover:border-brand-400 hover:shadow-md transition-all duration-200 cursor-pointer group flex flex-col justify-between"
+                <button
+                  type="button"
+                  key={tmpl.title}
+                  onClick={() => handleTemplateClick(tmpl)}
+                  disabled={Boolean(creatingTemplate)}
+                  className="text-left bg-white rounded-2xl border border-slate-200/80 p-5 hover:border-brand-400 hover:shadow-md transition-all duration-200 cursor-pointer group flex flex-col justify-between disabled:opacity-60 disabled:cursor-wait"
                 >
                   <div className="flex items-center justify-between mb-4">
                     <div
@@ -210,15 +283,19 @@ export default function Dashboard() {
                     >
                       <Icon className="w-5 h-5" />
                     </div>
-                    <Plus className="w-4 h-4 text-slate-300 group-hover:text-brand-600 transition" />
+                    {creatingTemplate === tmpl.title ? (
+                      <Loader2 className="w-4 h-4 text-brand-600 animate-spin" />
+                    ) : (
+                      <Plus className="w-4 h-4 text-slate-300 group-hover:text-brand-600 transition" />
+                    )}
                   </div>
                   <div>
                     <h4 className="font-bold text-sm text-slate-800 group-hover:text-brand-600 transition mb-1">
-                      {tmpl.title}
+                      {creatingTemplate === tmpl.title ? 'Preparing with Gemini...' : tmpl.title}
                     </h4>
                     <p className="text-xs text-slate-400 leading-relaxed">{tmpl.desc}</p>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -233,14 +310,29 @@ export default function Dashboard() {
                 Shared document spaces with real-time permissions
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowModal(true)}
-              className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
-            >
-              <FolderPlus className="w-4 h-4" />
-              <span>New Workspace</span>
-            </button>
+            <div className="flex items-center gap-2">
+              {inviteableWorkspaces.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInviteWorkspace(inviteableWorkspaces[0]);
+                    setShowInviteModal(true);
+                  }}
+                  className="px-4 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Invite Member</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowModal(true)}
+                className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+              >
+                <FolderPlus className="w-4 h-4" />
+                <span>New Workspace</span>
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -279,10 +371,37 @@ export default function Dashboard() {
                     <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 group-hover:bg-brand-50 group-hover:text-brand-600 flex items-center justify-center transition">
                       <Folder className="w-5 h-5" />
                     </div>
-                    <span className="text-[11px] font-semibold bg-slate-100 group-hover:bg-brand-50 text-slate-600 group-hover:text-brand-700 px-2.5 py-1 rounded-full transition flex items-center gap-1">
-                      <Users className="w-3 h-3" />
-                      {ws.members?.length || 1} members
-                    </span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[11px] font-semibold bg-slate-100 group-hover:bg-brand-50 text-slate-600 group-hover:text-brand-700 px-2.5 py-1 rounded-full transition flex items-center gap-1">
+                        <Users className="w-3 h-3" />
+                        {ws.members?.length || 1} members
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          navigate(`/workspace/${ws._id}`);
+                        }}
+                        className="text-[11px] font-semibold text-slate-600 hover:text-brand-700 px-2 py-1 rounded-lg hover:bg-brand-50 transition flex items-center gap-1"
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                        Members
+                      </button>
+                      {canInviteToWorkspace(ws) && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setInviteWorkspace(ws);
+                            setShowInviteModal(true);
+                          }}
+                          className="text-[11px] font-semibold text-brand-600 hover:text-brand-700 px-2 py-1 rounded-lg hover:bg-brand-50 transition flex items-center gap-1"
+                        >
+                          <UserPlus className="w-3.5 h-3.5" />
+                          Invite
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div>
@@ -290,7 +409,7 @@ export default function Dashboard() {
                       {ws.name}
                     </h4>
                     <p className="text-xs text-slate-400">
-                      Owner: {ws.owner?.name ? (ws.owner?._id === user?._id ? 'You' : ws.owner?.name) : 'You'}
+                      Owner: {ws.owner?.name ? (isWorkspaceOwner(ws) ? 'You' : ws.owner?.name) : 'You'}
                     </p>
                   </div>
 
@@ -323,6 +442,7 @@ export default function Dashboard() {
                 onClick={() => {
                   setShowModal(false);
                   setNewName('');
+                  setPendingTemplate(null);
                 }}
                 className="text-slate-400 hover:text-slate-600 text-sm font-semibold"
               >
@@ -347,6 +467,7 @@ export default function Dashboard() {
                   onClick={() => {
                     setShowModal(false);
                     setNewName('');
+                    setPendingTemplate(null);
                   }}
                   className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 transition"
                 >
@@ -358,6 +479,107 @@ export default function Dashboard() {
                   className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-semibold shadow-xs transition disabled:opacity-50"
                 >
                   {creating ? 'Creating...' : 'Create Workspace'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showInviteModal && inviteWorkspace && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl border border-slate-100">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <UserPlus className="w-4 h-4" />
+                </div>
+                <h3 className="font-bold text-slate-800">Invite Team Member</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowInviteModal(false);
+                  setInviteWorkspace(null);
+                  setInviteUsername('');
+                }}
+                className="text-slate-400 hover:text-slate-600 text-sm font-semibold"
+                aria-label="Close invite dialog"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">
+              Invite someone to <strong>{inviteWorkspace.name}</strong> to collaborate.
+            </p>
+            <form onSubmit={inviteMember} className="space-y-4">
+              {inviteableWorkspaces.length > 1 && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Workspace
+                  </label>
+                  <select
+                    value={inviteWorkspace._id}
+                    onChange={(e) =>
+                      setInviteWorkspace(
+                        inviteableWorkspaces.find((workspace) => workspace._id === e.target.value)
+                      )
+                    }
+                    className="w-full px-3.5 py-2.5 text-xs text-slate-800 border border-slate-300 rounded-xl focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition"
+                  >
+                    {inviteableWorkspaces.map((workspace) => (
+                      <option key={workspace._id} value={workspace._id}>
+                        {workspace.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Username or email
+                </label>
+                <input
+                  type="text"
+                  value={inviteUsername}
+                  onChange={(e) => setInviteUsername(e.target.value)}
+                  placeholder="Username or colleague@example.com"
+                  className="w-full px-3.5 py-2.5 text-xs text-slate-800 border border-slate-300 rounded-xl focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition"
+                  autoFocus
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Access Role
+                </label>
+                <select
+                  value={inviteRole}
+                  onChange={(e) => setInviteRole(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs text-slate-800 border border-slate-300 rounded-xl focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none transition"
+                >
+                  <option value="editor">Editor (Can create and edit documents)</option>
+                  <option value="viewer">Viewer (Read-only access)</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setInviteWorkspace(null);
+                    setInviteUsername('');
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={inviting || !inviteUsername.trim()}
+                  className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-semibold shadow-xs transition disabled:opacity-50"
+                >
+                  {inviting ? 'Sending Invite...' : 'Send Invitation'}
                 </button>
               </div>
             </form>
